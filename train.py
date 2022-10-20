@@ -53,7 +53,7 @@ def train(args, data_info, show_loss):
             np.random.shuffle(train_data)
 
             start = 0
-            start_time = time.time()
+            epoch_start_time = time.time()
 
 
             while start < train_data.shape[0]:
@@ -64,7 +64,8 @@ def train(args, data_info, show_loss):
                     print('%.1f%% %.4f' % (start / train_data.shape[0] * 100, loss))
                 if args.wandb :
                     wandb.log({'train_loss': loss})    
-            train_time += time.time() - start_time
+            epoch_end_time = time.time()
+            train_time += epoch_end_time - epoch_start_time
             # evaluation
             train_auc, train_acc = evaluation(sess, args, model, train_data, ripple_set, args.batch_size)
 
@@ -76,32 +77,30 @@ def train(args, data_info, show_loss):
             test_time += time.time()- start_time
 
             USER_TEST_BATCH = 1
-            val_auc, val_ndcg, val_precision, val_recall, val_hit_ratio = test(sess, args, model, eval_data, ripple_set, pos_mapping, all_items, 
+            #val_auc, val_ndcg, val_precision, val_recall, val_hit_ratio 
+            eval_metrics = test(sess, args, model, eval_data, ripple_set, pos_mapping, all_items, 
                                 K=10, batch_size=USER_TEST_BATCH, test_split_name='val')
 
-            start_time = time.time() 
-            test_auc, test_ndcg, test_precision, test_recall, test_hit_ratio = test(sess, args, model, test_data, ripple_set, pos_mapping, all_items, 
+            test_start_time = time.time() 
+            #test_auc, test_ndcg, test_precision, test_recall, test_hit_ratio = 
+            test_metrics = test(sess, args, model, test_data, ripple_set, pos_mapping, all_items, 
                                 K=10, batch_size=USER_TEST_BATCH, test_split_name='test')            
-            final_test_time += time.time() - start_time
+            test_end_time = time.time()
+            final_test_time += test_end_time - start_time
             print('epoch %d    train auc: %.4f  acc: %.4f    eval auc: %.4f  acc: %.4f    test auc: %.4f  acc: %.4f'
                   % (step, train_auc, train_acc, eval_auc, eval_acc, test_auc, test_acc))
             
-            print('val auc: %.4f  test auc: %.4f \nval ndcg: %.4f  test ndcg: %.4f \nval recall: %.4f  test recall: %.4f \nval precision: %.4f  test precision: %.4f \nval hitratio: %.4f  test hitratio: %.4f'
-                  % (val_auc, test_auc, val_ndcg, test_ndcg, val_recall, test_recall, val_precision, test_precision, val_hit_ratio, test_hit_ratio))
+            #print('val auc: %.4f  test auc: %.4f \nval ndcg: %.4f  test ndcg: %.4f \nval recall: %.4f  test recall: %.4f \nval precision: %.4f  test precision: %.4f \nval hitratio: %.4f  test hitratio: %.4f'
+            #      % (val_auc, test_auc, val_ndcg, test_ndcg, val_recall, test_recall, val_precision, test_precision, val_hit_ratio, test_hit_ratio))
             
             val_logs = {'epoch': step,
-                        'val_auc' : val_auc,
-                        'test_auc' : test_auc,
-                        'val_ndcg' : val_ndcg,
-                        'test_ndcg' : test_ndcg,
-                        'val_recall' : val_recall,
-                        'test_recall' : test_recall,
-                        'val_precision' : val_precision,
-                        'test_precision' : test_precision,
-                        'val_hit_ratio' : val_hit_ratio,
-                        'test_hit_ratio' : test_hit_ratio,
-                        'train_time' : train_time,
-                        'test_time' : test_time,}
+                        'train_epoch_time':epoch_end_time - epoch_start_time,
+                        'train_total_time':train_time,
+                        'test_epoch_time': test_end_time - start_time,
+                        'test_total_time':final_test_time,
+                    **test_metrics,
+                    **eval_metrics,
+            }
 
 
             if args.wandb :
@@ -395,23 +394,46 @@ def test(sess, args, model, data, ripple_set, pos_mapping, all_items, K=10, batc
         scores = model.inference(sess, kgat_feed_dict(args, model, data, ripple_set, test_user_batch, item_batch))
         #scores = scores.reshape(-1,len(items))
         offset = 0 
+
+        
+        
+        metrics_fn_dict = {'ndcg': lambda r,K:ndcg_at_k(r, K) ,
+                                'recall':lambda r,K, n_pos_items:recall_at_k(r, K, n_pos_items),
+                                'precision':lambda r,K:precision_at_k(r, K),
+                                'hit_ratio':lambda r,K:hit_at_k(r, K),}
+
+        metrics_dict = dict()
+
         for user_id, test_pos_items, test_items in user_items_pairings:
             n_test_items = len(test_items)
 
             curr_item_scores = scores[offset:(offset+n_test_items)]
 
-            
-            r, auc, r_pred_scores = ranklist(test_pos_items, test_items, curr_item_scores, K)
-            ndcg_list.append(ndcg_at_k(r, K))
+            for k in [10,20,30,40]:
+                r, auc, r_pred_scores = ranklist(test_pos_items, test_items, curr_item_scores, k)
+                for metric_name, metric_fn in metrics_fn_dict.items():
+                    key = f'{metric_name}@{k}'
+                    
+                    if key not in metrics_dict:
+                        metrics_dict[key] = []
+
+                    if metric_name == 'recall':
+                        if len(test_pos_items) > 0:
+                            metrics_dict[key].append(metric_fn(r,k, len(test_pos_items)))
+                    else:
+                        metrics_dict[key].append(metric_fn(r,k ))
+
+            #r, auc, r_pred_scores = ranklist(test_pos_items, test_items, curr_item_scores, K)
+            #ndcg_list.append(ndcg_at_k(r, K))
             #precision_list.append(precision_at_k_mod(r, K, r_pred_scores ))#r, K))
-            precision_list.append(precision_at_k(r, K))
+            #precision_list.append(precision_at_k(r, K))
             #if sum(r) > 0:
             #ret_val = recall_at_k_mod(r, K, r_pred_scores )
-            if len(test_pos_items) > 0:
-                ret_val = recall_at_k(r, K, len(test_pos_items) )
-                recall_list.append(ret_val  )
-            hit_ratio_list.append(hit_at_k(r, K))
-            auc_list.append(auc )
+            #if len(test_pos_items) > 0:
+            #    ret_val = recall_at_k(r, K, len(test_pos_items) )
+            #    recall_list.append(ret_val  )
+            #hit_ratio_list.append(hit_at_k(r, K))
+            #auc_list.append(auc )
             
             offset += n_test_items
 
@@ -419,29 +441,12 @@ def test(sess, args, model, data, ripple_set, pos_mapping, all_items, K=10, batc
 
         progressbar.update(len(test_user_batch)  )
         
+    out_metrics = dict()
+    for metric_name, metric_values in metrics_dict.items():
+        out_metrics[metric_name] = np.mean(metric_values)
 
-        '''
-        scores = model.inference(sess, kgat_feed_dict(args, model, data, ripple_set, test_user_batch, item_batch))
-        scores = scores.reshape(-1,len(items))
-        ratings = scores
-        for user_id, ratings in zip(test_user_batch, ratings):
-            train_pos_items = pos_mapping['train'].get(user_id, [])
-            test_pos_items = pos_mapping[test_split_name].get(user_id, [])
-
-
-            test_items = list(all_items - set(train_pos_items))
-
-            r = ranklist_by_heapq(test_pos_items, test_items, ratings, K)
-
-            ndcg_list.append(ndcg_at_k(r, K))
-            precision_list.append(precision_at_k(r, K))
-            recall_list.append(recall_at_k(r, K, len(test_pos_items)))
-            hit_ratio_list.append(hit_at_k(r, K))
-            auc_list.append(get_auc(item_score, user_pos_test) )
-        start += batch_size
-        '''
     progressbar.close()
 
-    return float(np.mean(auc_list)), float(np.mean(ndcg_list)), float(np.mean(precision_list)),float(np.mean(recall_list)),float(np.mean(hit_ratio_list))
+    return out_metrics #float(np.mean(ndcg_list)), float(np.mean(precision_list)),float(np.mean(recall_list)),float(np.mean(hit_ratio_list))
 
 

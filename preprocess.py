@@ -5,14 +5,16 @@ import numpy as np
 
 RATING_FILE_NAME = dict({'ml1m': 'ratings.dat', 
     'ml1m_freebase':'ratings.dat',
+    'yago':'ratings.dat',
     'lfm1m': 'ratings.txt',
     'book': 'BX-Book-Ratings.csv', 
     'news': 'ratings.txt'})
 SEP = dict({'ml1m': '::', 'book': ';', 'news': '\t',
+    'yago': '::',
     'lfm1m': '\t',
     'ml1m_freebase':'::'
     })
-THRESHOLD = dict({'ml1m': 0, 'book': 0, 'news': 0,
+THRESHOLD = dict({'ml1m': 0, 'book': 0, 'news': 0,'yago': 0,
                 'lfm1m':0, 'ml1m_freebase':0})
 
 
